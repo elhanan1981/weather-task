@@ -1,9 +1,11 @@
-# weather_import.py
 import json
 import logging
 from pathlib import Path
 from typing import Dict, Any
-from database import get_connection
+from .db_connection import get_connection
+import urllib.request
+import sys
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -101,14 +103,14 @@ def insert_daily_weather(location_id: int, day_data: Dict[str, Any]) -> tuple[in
     finally:
         connection.close()
 
-def insert_hourly_weather(daily_id: int, hour_data: Dict[str, Any], date: str) -> bool:
-    """Insert hourly weather data"""
+
+def insert_hourly_weather(daily_id: int, date: str,hours_data: list) -> bool:
+    """Insert hourly weather data in bulk for a single day"""
     connection = get_connection()
     try:
         cursor = connection.cursor()
-        datetime_str = f"{date} {hour_data['datetime']}"
         
-        # No need to check - if we got here, we know we need to insert
+        # Prepare the list of tuples for all hours of the day
         query = """
         INSERT INTO hourly_weather (
             daily_id, datetime, temp, humidity, wind_speed,
@@ -116,17 +118,25 @@ def insert_hourly_weather(daily_id: int, hour_data: Dict[str, Any], date: str) -
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
         """
-        cursor.execute(query, (
-            daily_id,
-            datetime_str,
-            hour_data['temp'],
-            hour_data['humidity'],
-            hour_data['windspeed'],
-            hour_data.get('windgust', 0),
-            hour_data['winddir'],
-            hour_data['cloudcover'],
-            hour_data['conditions']
-        ))
+        
+        # Prepare the data for all hours
+        data_to_insert = [
+            (
+                daily_id,
+                f"{date} {hour['datetime']}",  # Combine date and time
+                hour['temp'],
+                hour['humidity'],
+                hour['windspeed'],
+                hour.get('windgust', 0),
+                hour['winddir'],
+                hour['cloudcover'],
+                hour['conditions']
+            )
+            for hour in hours_data
+        ]
+        
+        # Use executemany for bulk insertion
+        cursor.executemany(query, data_to_insert)
         connection.commit()
         return True
 
@@ -136,6 +146,7 @@ def insert_hourly_weather(daily_id: int, hour_data: Dict[str, Any], date: str) -
         return False
     finally:
         connection.close()
+
 
 def process_weather_data(weather_data: Dict[str, Any]) -> bool:
     try:
@@ -150,55 +161,38 @@ def process_weather_data(weather_data: Dict[str, Any]) -> bool:
                 continue
                 
             logger.info(f"Processing new daily weather for {day['datetime']}")
-            # Only insert hourly data for new daily records
-            for hour in day['hours']:
-                if not insert_hourly_weather(daily_id, hour, day['datetime']):
-                    logger.error(f"Failed to insert hourly weather for {day['datetime']} {hour['datetime']}")
+            
+            # Gather all hourly data for the day
+            hourly_data = day['hours']
+            
+            # Insert all hourly weather data in bulk for the day
+            if not insert_hourly_weather(daily_id,day['datetime'],hourly_data):
+                logger.error(f"Failed to insert hourly weather for {day['datetime']}")
 
         return True
-
 
     except Exception as e:
         logger.error(f"Error processing weather data: {e}")
         return False
-        
 
-def import_weather_from_file(file_path: str) -> bool:
-    """Import weather data from a JSON file into the database"""
+
+def get_weather_data():
+    print('hi')
+    # api_key = "HUZLDMPCUMZDGQ5KVRX3SLYSB"
+    api_key = "5TWR5QJ6A6C6S4YGURJFXWZCS"
+
+    url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/Los%20angeles/last30days?unitGroup=metric&key={api_key}&contentType=json"
+    
     try:
-        # Check if file exists
-        if not Path(file_path).exists():
-            logger.error(f"File not found: {file_path}")
-            return False
-            
-        # Read JSON file
-        logger.info(f"Reading weather data from {file_path}")
-        with open(file_path, 'r') as file:
-            weather_data = json.load(file)
-            
-        # Log basic information
-        days_count = len(weather_data.get('days', []))
-        logger.info(f"Found {days_count} days of weather data for {weather_data.get('resolvedAddress', 'unknown location')}")
-        
-        # Process the weather data
-        return process_weather_data(weather_data)
-            
-    except json.JSONDecodeError as e:
-        logger.error(f"Error decoding JSON file: {e}")
-        return False
-    except Exception as e:
-        logger.error(f"Unexpected error importing weather data: {e}")
-        return False
+        ResultBytes = urllib.request.urlopen(url)
+        weather_data = json.load(ResultBytes)
 
-if __name__ == "__main__":
-    # This allows you to run the script directly
-    import sys
+        print(weather_data)
+        return process_weather_data(weather_data)
     
-    # Use command line argument if provided, otherwise use default
-    file_path = sys.argv[1] if len(sys.argv) > 1 else "weather_data.json"
-    
-    if import_weather_from_file(file_path):
-        print("Weather data imported successfully!")
-    else:
-        print("Failed to import weather data. Check the logs for details.")
-        sys.exit(1)
+    except urllib.error.HTTPError  as e:
+        ErrorInfo= e.read().decode() 
+        logger.error(f"Error processing weather data: {e}")
+        print('Error code: ', e.code, ErrorInfo)
+        sys.exit()
+        return False

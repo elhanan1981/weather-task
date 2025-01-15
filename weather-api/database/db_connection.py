@@ -1,10 +1,8 @@
 import psycopg2
-from psycopg2 import sql
 from dotenv import load_dotenv
 import os
 import logging
 
-# Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -18,7 +16,6 @@ password = os.getenv("PASSWORD")
 
 def get_connection():
     try:
-        # Establish the connection
         connection = psycopg2.connect(
             host=host,
             port=port,
